@@ -155,6 +155,46 @@ function Unmap-DriveLetter {
     }
 }
 
+function Get-WslBindfsMount {
+    param(
+        [string]$TargetDistro,
+        [string]$MountName
+    )
+    $rawPath = "/mnt/wsl/$MountName"
+    $winMountName = "${MountName}_win"
+    $winPath = "/mnt/wsl/$winMountName"
+
+    $hasBindfs = (& wsl.exe -d $TargetDistro -- command -v bindfs 2>$null)
+    if (-not $hasBindfs) {
+        Write-Host "Note: 'bindfs' not found in $TargetDistro; mapping raw mount. Install bindfs (sudo apt install bindfs) if Synology folders give Access Denied." -ForegroundColor DarkYellow
+        return $MountName
+    }
+
+    $uid = ((& wsl.exe -d $TargetDistro -- id -u 2>$null) | Out-String).Trim()
+    $gid = ((& wsl.exe -d $TargetDistro -- id -g 2>$null) | Out-String).Trim()
+    if (-not ($uid -match '^\d+$') -or -not ($gid -match '^\d+$')) {
+        return $MountName
+    }
+
+    & wsl.exe -d $TargetDistro -u root -- bash -c "mkdir -p '$winPath' && (mountpoint -q '$winPath' || bindfs -u $uid -g $gid -o allow_other '$rawPath' '$winPath')" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Mounted UID-mapped view ($uid`:$gid) at $winPath" -ForegroundColor Green
+        return $winMountName
+    }
+
+    Write-Warning "bindfs mount failed; falling back to raw mount $rawPath."
+    return $MountName
+}
+
+function Remove-WslBindfsMount {
+    param(
+        [string]$TargetDistro,
+        [string]$MountName
+    )
+    $winPath = "/mnt/wsl/${MountName}_win"
+    & wsl.exe -d $TargetDistro -u root -- bash -c "if mountpoint -q '$winPath'; then umount '$winPath'; fi; rmdir '$winPath' 2>/dev/null || true" 2>$null | Out-Null
+}
+
 # --- 6. Core Actions ---
 function Invoke-MountAndMap {
     param([string]$TargetDistro, [string]$Letter)
@@ -168,26 +208,26 @@ function Invoke-MountAndMap {
     if (-not $picked) { return }
 
     $mountName = "PHYSICALDRIVE$($picked.Number)p$Partition"
-    $uncPath = "\\wsl.localhost\$TargetDistro\mnt\wsl\$mountName"
+    $rawUncPath = "\\wsl.localhost\$TargetDistro\mnt\wsl\$mountName"
 
     # Wake WSL distro VM first to check if already mounted
     & wsl.exe -d $TargetDistro -- true 2>$null | Out-Null
-    if (Test-Path $uncPath) {
-        Write-Host "$mountName is already mounted in WSL at $uncPath. Mapping drive letter..." -ForegroundColor Yellow
-        Map-WslShareToLetter -Letter $Letter -UncPath $uncPath | Out-Null
-        return
+    if (Test-Path $rawUncPath) {
+        Write-Host "$mountName is already mounted in WSL at $rawUncPath. Mapping drive letter..." -ForegroundColor Yellow
+    } else {
+        Write-Host "Mounting $($picked.DeviceID) (partition $Partition, $FileSystem) into WSL (UAC prompt if not elevated)..." -ForegroundColor Cyan
+        $mountExit = Invoke-ElevatedWsl -Arguments @("--mount", $picked.DeviceID, "--partition", "$Partition", "--type", $FileSystem)
+        if ($mountExit -ne 0) {
+            Write-Error "wsl --mount failed (exit code $mountExit). Check if already mounted or partition index differs."
+            return
+        }
+
+        # Ensure WSL distro VM is awake so \\wsl.localhost responds
+        & wsl.exe -d $TargetDistro -- true 2>$null | Out-Null
     }
 
-    Write-Host "Mounting $($picked.DeviceID) (partition $Partition, $FileSystem) into WSL (UAC prompt if not elevated)..." -ForegroundColor Cyan
-    $mountExit = Invoke-ElevatedWsl -Arguments @("--mount", $picked.DeviceID, "--partition", "$Partition", "--type", $FileSystem)
-    if ($mountExit -ne 0) {
-        Write-Error "wsl --mount failed (exit code $mountExit). Check if already mounted or partition index differs."
-        return
-    }
-
-    # Ensure WSL distro VM is awake so \\wsl.localhost responds
-    & wsl.exe -d $TargetDistro -- true 2>$null | Out-Null
-
+    $effectiveMount = Get-WslBindfsMount -TargetDistro $TargetDistro -MountName $mountName
+    $uncPath = "\\wsl.localhost\$TargetDistro\mnt\wsl\$effectiveMount"
     Map-WslShareToLetter -Letter $Letter -UncPath $uncPath | Out-Null
 }
 
@@ -203,6 +243,9 @@ function Invoke-UnmapAndUnmount {
     if (-not $picked) { return }
 
     Unmap-DriveLetter -Letter $Letter
+
+    $mountName = "PHYSICALDRIVE$($picked.Number)p$Partition"
+    Remove-WslBindfsMount -TargetDistro $TargetDistro -MountName $mountName
 
     Write-Host "Syncing buffers and unmounting $($picked.DeviceID) from WSL (UAC prompt if not elevated)..." -ForegroundColor Cyan
     & wsl.exe -d $TargetDistro -- sync 2>$null | Out-Null
