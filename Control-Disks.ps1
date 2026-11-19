@@ -192,7 +192,7 @@ function Get-WslIdmapMount {
     }
 
     # Detect non-root owner UIDs in the top-level directory (e.g. Synology DSM UID 1026)
-    $srcUid = ((& wsl.exe -d $TargetDistro -u root -- bash -c "stat -c '%u' '$rawPath'/* 2>/dev/null | awk '\$1 >= 1000 && \$1 != $uid {print \$1; exit}'" 2>$null) | Out-String).Trim()
+    $srcUid = ((& wsl.exe -d $TargetDistro -u root -- bash -c "stat -c '%u' '$rawPath'/* 2>/dev/null | grep -E '^[0-9]{4,}$' | grep -vx '$uid' | head -n 1" 2>$null) | Out-String).Trim()
     if (-not ($srcUid -match '^\d+$')) {
         $srcUid = "1026"
     }
