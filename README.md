@@ -4,7 +4,7 @@ Interactive PowerShell menu to mount, map to a Windows drive letter, and safely 
 
 ## Features
 
-- **Automatic Administrator elevation** — Self-elevates via UAC (`RunAs`), which is required by `wsl --mount` and `wsl --unmount`.
+- **Targeted Administrator elevation** — Runs in your normal desktop session (so `subst` drive letters are visible in File Explorer) and elevates only `wsl --mount` and `wsl --unmount` via UAC.
 - **USB physical disk discovery** — Detects attached USB drives (`BusType = USB`) and displays disk number, model, size (GB), and operational status.
 - **Interactive selector** — Uses `fzf.exe` if available on `PATH` (e.g., via Scoop), and automatically falls back to a native numbered PowerShell menu.
 - **Drive-letter mapping** — Maps `\\wsl.localhost\<Distro>\mnt\wsl\PHYSICALDRIVE<N>p<Partition>` to a local Windows drive letter (default `S:`) using `subst.exe` without SMB authentication prompts.
