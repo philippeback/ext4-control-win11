@@ -16,7 +16,7 @@ param(
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 function Reset-ConsoleMode {
     # wsl.exe / fzf.exe can leave DISABLE_NEWLINE_AUTO_RETURN (0x0008) set on ConPTY stdout,
@@ -135,8 +135,7 @@ function Map-WslShareToLetter {
 
     # Remove stale mapping on the same letter if present
     if (Test-Path $driveRoot) {
-        & net.exe use $driveRoot /delete /y 2>$null | Out-Null
-        & subst.exe $driveRoot /D 2>$null | Out-Null
+        & cmd.exe /c "subst $driveRoot /D >nul 2>&1 & net use $driveRoot /delete /y >nul 2>&1"
     }
 
     # Wait briefly for \\wsl.localhost mountpoint to materialize
@@ -170,8 +169,7 @@ function Unmap-DriveLetter {
     $cleanLetter = $Letter.TrimEnd(":")
     $driveRoot = "${cleanLetter}:"
     if (Test-Path $driveRoot) {
-        & subst.exe $driveRoot /D 2>$null | Out-Null
-        & net.exe use $driveRoot /delete /y 2>$null | Out-Null
+        & cmd.exe /c "subst $driveRoot /D >nul 2>&1 & net use $driveRoot /delete /y >nul 2>&1"
         Write-Host "Unmapped drive letter $driveRoot" -ForegroundColor Yellow
     }
 }
