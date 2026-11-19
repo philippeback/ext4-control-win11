@@ -18,6 +18,27 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Reset-ConsoleMode {
+    # wsl.exe / fzf.exe can leave DISABLE_NEWLINE_AUTO_RETURN (0x0008) set on ConPTY stdout,
+    # causing Write-Host lines to stair-step across the terminal.
+    if (-not ("Win32.ConsoleHelper" -as [type])) {
+        Add-Type -Namespace Win32 -Name ConsoleHelper -MemberDefinition @"
+            [DllImport("kernel32.dll", SetLastError = true)]
+            public static extern IntPtr GetStdHandle(int nStdHandle);
+            [DllImport("kernel32.dll", SetLastError = true)]
+            public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+            [DllImport("kernel32.dll", SetLastError = true)]
+            public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+"@
+    }
+    $handle = [Win32.ConsoleHelper]::GetStdHandle(-11) # STD_OUTPUT_HANDLE
+    $mode = [uint32]0
+    if ([Win32.ConsoleHelper]::GetConsoleMode($handle, [ref]$mode)) {
+        $fixed = ($mode -band (-bnot 0x0008)) -bor 0x0003
+        [void][Win32.ConsoleHelper]::SetConsoleMode($handle, $fixed)
+    }
+}
+
 # --- 1. Elevation Helpers (Only wsl --mount / --unmount require Administrator) ---
 # Running the main script non-elevated ensures subst drive letters are visible in File Explorer.
 function Test-IsAdministrator {
@@ -271,6 +292,7 @@ function Show-Status {
 
     Write-Host "--- Active WSL Mounts (/mnt/wsl) ---" -ForegroundColor Cyan
     & wsl.exe -d $TargetDistro -- ls -la /mnt/wsl 2>$null
+    Reset-ConsoleMode
 
     $driveRoot = "$($Letter.TrimEnd(':')):"
     Write-Host "`n--- Drive Letter $driveRoot Status ---" -ForegroundColor Cyan
@@ -291,6 +313,7 @@ try {
 }
 
 while ($true) {
+    Reset-ConsoleMode
     Write-Host "`n==========================================" -ForegroundColor DarkCyan
     Write-Host " Synology EXT4 USB Manager (WSL2 -> $($DriveLetter.TrimEnd(':')):)" -ForegroundColor White
     Write-Host " Distro: $targetDistro" -ForegroundColor DarkGray
