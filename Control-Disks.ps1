@@ -155,7 +155,7 @@ function Unmap-DriveLetter {
     }
 }
 
-function Get-WslBindfsMount {
+function Get-WslIdmapMount {
     param(
         [string]$TargetDistro,
         [string]$MountName
@@ -164,35 +164,37 @@ function Get-WslBindfsMount {
     $winMountName = "${MountName}_win"
     $winPath = "/mnt/wsl/$winMountName"
 
-    $hasBindfs = (& wsl.exe -d $TargetDistro -- command -v bindfs 2>$null)
-    if (-not $hasBindfs) {
-        Write-Host "Note: 'bindfs' not found in $TargetDistro; mapping raw mount. Install bindfs (sudo apt install bindfs) if Synology folders give Access Denied." -ForegroundColor DarkYellow
-        return $MountName
-    }
-
     $uid = ((& wsl.exe -d $TargetDistro -- id -u 2>$null) | Out-String).Trim()
     $gid = ((& wsl.exe -d $TargetDistro -- id -g 2>$null) | Out-String).Trim()
     if (-not ($uid -match '^\d+$') -or -not ($gid -match '^\d+$')) {
         return $MountName
     }
 
-    & wsl.exe -d $TargetDistro -u root -- bash -c "mkdir -p '$winPath' && (mountpoint -q '$winPath' || bindfs -u $uid -g $gid -o allow_other '$rawPath' '$winPath')" 2>$null
+    # Detect non-root owner UIDs in the top-level directory (e.g. Synology DSM UID 1026)
+    $srcUid = ((& wsl.exe -d $TargetDistro -u root -- bash -c "stat -c '%u' '$rawPath'/* 2>/dev/null | awk '\$1 >= 1000 && \$1 != $uid {print \$1; exit}'" 2>$null) | Out-String).Trim()
+    if (-not ($srcUid -match '^\d+$')) {
+        $srcUid = "1026"
+    }
+
+    $idmapSpec = "u:0:0:1 u:${srcUid}:${uid}:1 g:100:${gid}:1"
+    $cmd = "mkdir -p '$winPath'; if mountpoint -q '$winPath'; then exit 0; fi; umount -l '$winPath' 2>/dev/null || true; mount --bind -o 'X-mount.idmap=$idmapSpec' '$rawPath' '$winPath'"
+    & wsl.exe -d $TargetDistro -u root -- bash -c $cmd 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "Mounted UID-mapped view ($uid`:$gid) at $winPath" -ForegroundColor Green
+        Write-Host "Mounted kernel idmap view (${srcUid}->${uid}) at $winPath" -ForegroundColor Green
         return $winMountName
     }
 
-    Write-Warning "bindfs mount failed; falling back to raw mount $rawPath."
+    Write-Warning "Kernel idmap mount failed; falling back to raw mount $rawPath."
     return $MountName
 }
 
-function Remove-WslBindfsMount {
+function Remove-WslIdmapMount {
     param(
         [string]$TargetDistro,
         [string]$MountName
     )
     $winPath = "/mnt/wsl/${MountName}_win"
-    & wsl.exe -d $TargetDistro -u root -- bash -c "if mountpoint -q '$winPath'; then umount '$winPath'; fi; rmdir '$winPath' 2>/dev/null || true" 2>$null | Out-Null
+    & wsl.exe -d $TargetDistro -u root -- bash -c "umount -l '$winPath' 2>/dev/null || true; rmdir '$winPath' 2>/dev/null || true" 2>$null | Out-Null
 }
 
 # --- 6. Core Actions ---
@@ -226,7 +228,7 @@ function Invoke-MountAndMap {
         & wsl.exe -d $TargetDistro -- true 2>$null | Out-Null
     }
 
-    $effectiveMount = Get-WslBindfsMount -TargetDistro $TargetDistro -MountName $mountName
+    $effectiveMount = Get-WslIdmapMount -TargetDistro $TargetDistro -MountName $mountName
     $uncPath = "\\wsl.localhost\$TargetDistro\mnt\wsl\$effectiveMount"
     Map-WslShareToLetter -Letter $Letter -UncPath $uncPath | Out-Null
 }
@@ -245,7 +247,7 @@ function Invoke-UnmapAndUnmount {
     Unmap-DriveLetter -Letter $Letter
 
     $mountName = "PHYSICALDRIVE$($picked.Number)p$Partition"
-    Remove-WslBindfsMount -TargetDistro $TargetDistro -MountName $mountName
+    Remove-WslIdmapMount -TargetDistro $TargetDistro -MountName $mountName
 
     Write-Host "Syncing buffers and unmounting $($picked.DeviceID) from WSL (UAC prompt if not elevated)..." -ForegroundColor Cyan
     & wsl.exe -d $TargetDistro -- sync 2>$null | Out-Null
