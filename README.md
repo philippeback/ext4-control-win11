@@ -70,6 +70,29 @@ Once running, the script presents the following options:
 5. **`[Q] Quit`**  
    Exit the script.
 
+## Performance
+
+### Using Two Disks in Parallel
+
+When copying large amounts of data from a fast internal NVMe/SSD to spinning USB HDDs:
+
+- **Parallelize across separate disks:** A typical 7200 RPM USB HDD maxes out around **~180–220 MB/s** sequential write, while a modern NVMe SSD can feed several GB/s. Copying different folders to **two separate USB HDDs simultaneously** can roughly double total throughput (**~350–440 MB/s** combined).
+- **Use separate motherboard USB ports (avoid a shared hub):** Two drives on a single 5 Gbps USB 3.0 hub share ~400–450 MB/s real-world bandwidth and contend for USB transactions. Plug each drive into its own rear motherboard port (ideally 10 Gbps / separate controllers).
+- **One copy stream per spinning disk:** Never run two concurrent copy jobs to the *same* spinning HDD — head seeking will drop throughput sharply.
+- **Mount a second disk to another drive letter:**
+  ```powershell
+  .\Control-Disks.ps1 -DriveLetter T
+  ```
+  This maps the second drive to `T:` while keeping `S:` mapped to the first drive.
+
+### Large Files vs. Many Small Files (`9P` Overhead)
+
+- **Large files (videos, ISOs, archives):** Copying through the mapped Windows drive (`S:`) in Explorer, Far Manager, or Robocopy runs close to native disk speed.
+- **Tens of thousands of small files:** Accessing `S:` routes through Windows' WSL `9P` bridge (`\\wsl.localhost`), which adds per-file latency. For small-file-heavy workloads, copy directly inside WSL to bypass `9P` overhead (using the `_win` mountpoint so Synology ownership is preserved):
+  ```bash
+  rsync -a /mnt/c/path/to/source/ /mnt/wsl/PHYSICALDRIVE1p1_win/target/
+  ```
+
 ## Notes & Troubleshooting
 
 - **Always unmount before unplugging:** Use option `[2]` to flush buffers and detach the drive from WSL before disconnecting the USB cable.
